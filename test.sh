@@ -5,7 +5,7 @@ repo="$(cd "$(dirname "$0")" && pwd)"
 seh="$repo/bin/seh"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 export SEH_ROOT="$tmp/registry"
-unset PI_SESSION_ID CODEX_THREAD_ID CLAUDE_CODE_SESSION_ID DEVIN_SESSION_ID
+unset PI_SESSION_ID OMP_SESSION_ID CODEX_THREAD_ID CLAUDE_CODE_SESSION_ID
 fail() { echo "FAIL: $*"; exit 1; }
 
 printf '#!/bin/sh\necho "a:$(jq -r .source)"\n' > "$tmp/a.sh"
@@ -24,7 +24,7 @@ grep -q 'b.sh exited 3' "$tmp/err" || fail "failure not reported"
 [[ -z "$(echo '{"session_id":"sid1"}' | "$seh" dispatch stop)" ]] || fail "other event ran scripts"
 
 # add: session id from each CLI's env, inner CLI first
-for var in PI_SESSION_ID CODEX_THREAD_ID CLAUDE_CODE_SESSION_ID; do
+for var in PI_SESSION_ID OMP_SESSION_ID CODEX_THREAD_ID CLAUDE_CODE_SESSION_ID; do
   env "$var=env-$var" "$seh" add stop "$tmp/c.sh" | grep -q "/env-$var/stop/" || fail "add via $var"
 done
 env CLAUDE_CODE_SESSION_ID=outer PI_SESSION_ID=inner "$seh" add stop "$tmp/c.sh" | grep -q /inner/ || fail "nested precedence"
@@ -32,7 +32,7 @@ env CLAUDE_CODE_SESSION_ID=outer PI_SESSION_ID=inner "$seh" add stop "$tmp/c.sh"
 
 # show / remove
 [[ "$("$seh" show sid1)" == "sid1/compact/a.sh -> $tmp/a.sh"$'\n'"sid1/compact/b.sh -> $tmp/b.sh"$'\n'"sid1/compact/c.sh -> $tmp/c.sh" ]] || fail "show session"
-[[ "$("$seh" show | wc -l)" -eq 7 ]] || fail "show all outside a session"
+[[ "$("$seh" show | wc -l)" -eq 8 ]] || fail "show all outside a session"
 CLAUDE_CODE_SESSION_ID=env-CLAUDE_CODE_SESSION_ID "$seh" show | grep -q '^env-CLAUDE_CODE_SESSION_ID/stop/c.sh ->' || fail "show current"
 "$seh" remove compact a.sh sid1 >/dev/null
 [[ "$("$seh" show sid1 | wc -l)" -eq 2 ]] || fail "remove one"
@@ -53,30 +53,41 @@ PI_SESSION_ID=inner "$seh" remove stop "$tmp/c.sh" >/dev/null
   [[ "$out" == "$SEH_ROOT/devin-sid/stop/c.sh" ]] || fail "devin session id: $out"
 )
 
-# Pi extension: drive handlers with a fake pi and check what seh receives
-mkdir -p "$tmp/bin"
-printf '#!/bin/sh\ncat > "%s/pi-$2.json"\necho "ctx-$2"\n' "$tmp" > "$tmp/bin/seh"
-chmod +x "$tmp/bin/seh"
-PATH="$tmp/bin:$PATH" node --input-type=module -e "
-import ext from '$repo/pi/seh.js';
+# Pi / Oh My Pi extensions: drive handlers with a fake pi and a fake bundled seh
+mkdir -p "$tmp/pkg/bin"
+cp -R "$repo/pi" "$repo/package.json" "$tmp/pkg/"
+printf '#!/bin/sh\ncat > "%s/pi-$2.json"\necho "ctx-$2"\n' "$tmp" > "$tmp/pkg/bin/seh"
+chmod +x "$tmp/pkg/bin/seh"
+node --input-type=module -e "
+import pi from '$tmp/pkg/pi/seh.ts';
+import omp from '$tmp/pkg/pi/omp.ts';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-const h = {};
-ext({ on: (name, fn) => { h[name] = fn; } });
-const ctx = { sessionManager: { getSessionId: () => 'pi-sid', getCwd: () => '/w' } };
+const load = (ext) => { const h = {}; ext({ on: (name, fn) => { h[name] = fn; } }); return h; };
+const ctx = { cwd: '/w', sessionManager: { getSessionId: () => 'pi-sid' } };
+const h = load(pi);
 h.session_compact({ reason: 'threshold', signal: new AbortController().signal }, ctx);
 assert.deepEqual(JSON.parse(readFileSync('$tmp/pi-compact.json', 'utf8')),
   { hook_event_name: 'compact', session_id: 'pi-sid', cwd: '/w', source: 'threshold' });
 h.session_start({ reason: 'startup' }, ctx);
-const r = h.before_agent_start({ prompt: 'hi' }, ctx);
-assert.equal(r.message.content, 'ctx-compact\n\nctx-session-start\n\nctx-prompt');
+assert.equal(h.before_agent_start({ prompt: 'hi' }, ctx).message.content, 'ctx-compact\n\nctx-session-start\n\nctx-prompt');
 assert.equal(h.before_agent_start({ prompt: 'again' }, ctx).message.content, 'ctx-prompt');
-" || fail "pi extension"
+assert.ok(h.agent_settled && !h.agent_end);
+assert.equal(h.tool_call({ toolName: 'bash', input: { command: 'ls' } }, ctx), undefined);
+const o = load(omp);
+assert.ok(o.agent_end && !o.agent_settled);
+assert.equal(o.tool_call({ toolName: 'bash', input: { command: 'ls' } }, ctx), undefined);
+" || fail "pi extensions"
 
 # init: wires found CLIs, is idempotent, keeps other hooks
 (
   export HOME="$tmp/home"; unset CLAUDE_CONFIG_DIR CODEX_HOME
-  mkdir -p "$HOME/.claude" "$HOME/.codex" "$HOME/.pi/agent"
+  mkdir -p "$HOME/.claude" "$HOME/.codex" "$HOME/.pi/agent" "$HOME/.omp/agent" "$tmp/fbin"
+  for c in pi omp; do
+    printf '#!/bin/sh\necho "%s $*" >> "%s/installs"\n' "$c" "$tmp" > "$tmp/fbin/$c"
+    chmod +x "$tmp/fbin/$c"
+  done
+  export PATH="$tmp/fbin:$PATH"
   echo '{"model":"x","hooks":{"Stop":[{"hooks":[{"type":"command","command":"keep-me"}]}]}}' > "$HOME/.claude/settings.json"
   "$seh" init >/dev/null && "$seh" init >/dev/null
   s="$HOME/.claude/settings.json"
@@ -88,7 +99,7 @@ assert.equal(h.before_agent_start({ prompt: 'again' }, ctx).message.content, 'ct
   [[ ! -e "$HOME/.config/devin" ]] || fail "init touched a CLI that is not installed"
   "$seh" init devin >/dev/null
   jq -e '.hooks.PostCompaction[0].matcher == ""' "$HOME/.config/devin/config.json" >/dev/null || fail "devin wiring"
-  [[ "$(readlink "$HOME/.pi/agent/extensions/seh.js")" == "$repo/pi/seh.js" ]] || fail "pi link"
+  [[ "$(sort -u "$tmp/installs")" == "omp install npm:omp-shell-context $repo"$'\n'"pi install $repo" ]] || fail "pi/omp install: $(cat "$tmp/installs")"
   "$seh" init nope 2>/dev/null && fail "unknown CLI should fail"
 
   # configs seh cannot rewrite safely are left byte-for-byte unchanged, with no backup or temp file

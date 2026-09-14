@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Session-scoped hooks for Claude Code, Codex, Devin and Pi.
-#   seh init [claude|codex|devin|pi ...]       # wire CLIs to seh (default: every CLI found)
+# Session-scoped hooks for Claude Code, Codex, Devin, Pi and Oh My Pi.
+#   seh init [claude|codex|devin|pi|omp ...]   # wire CLIs to seh (default: every CLI found)
 #   seh add <event> <script> [session_id]      # session_id defaults to the current CLI session
 #   seh remove <event> <script> [session_id]
 #   seh show [session_id]                      # current session, or every session outside one
@@ -26,7 +26,8 @@ current_sid() {
     pid=$ppid
   done
   # An inner CLI wins over the CLI it was launched from.
-  echo "${PI_SESSION_ID:-${CODEX_THREAD_ID:-${CLAUDE_CODE_SESSION_ID:-}}}"
+  # OMP_SESSION_ID comes from the omp-shell-context plugin.
+  echo "${PI_SESSION_ID:-${OMP_SESSION_ID:-${CODEX_THREAD_ID:-${CLAUDE_CODE_SESSION_ID:-}}}}"
 }
 
 resolve_sid() { # [session_id]
@@ -62,11 +63,12 @@ wire() { # <config file> <jq add() calls>
 case "${1:-}" in
   init)
     shift
-    self="$(readlink -f "$0")"
+    self="$(readlink -f "$0")"; pkg="$(cd "$(dirname "$self")/.." && pwd)"
     claude="${CLAUDE_CONFIG_DIR:-$HOME/.claude}" codex="${CODEX_HOME:-$HOME/.codex}"
-    devin="$HOME/.config/devin" pi="$HOME/.pi/agent"
+    # shellcheck disable=SC2034 # read through ${!c} below
+    devin="$HOME/.config/devin" pi="$HOME/.pi/agent" omp="$HOME/.omp/agent"
     if (($# == 0)); then
-      for c in claude codex devin pi; do [[ -d "${!c}" ]] && set -- "$@" "$c"; done
+      for c in claude codex devin pi omp; do [[ -d "${!c}" ]] && set -- "$@" "$c"; done
       (($#)) || { echo "no supported CLI found" >&2; exit 1; }
     fi
     tools='add("PreToolUse"; null; "pre-tool") | add("PostToolUse"; null; "post-tool")
@@ -79,10 +81,9 @@ case "${1:-}" in
           | add("SessionStart"; "compact"; "compact") | '"$tools" ;;
         devin) wire "$devin/config.json" 'add("SessionStart"; ""; "session-start")
           | add("PostCompaction"; ""; "compact") | '"${tools//null/\"\"}" ;;
-        pi)
-          mkdir -p "$pi/extensions"
-          ln -sfn "$(cd "$(dirname "$self")/../pi" && pwd)/seh.js" "$pi/extensions/seh.js"
-          echo "linked $pi/extensions/seh.js" ;;
+        # Pi and Oh My Pi load this repo as a package (see package.json), referenced in place.
+        pi) pi install "$pkg" ;;
+        omp) omp install npm:omp-shell-context "$pkg" ;;
         *) echo "unknown CLI: $c" >&2; exit 2 ;;
       esac
     done
