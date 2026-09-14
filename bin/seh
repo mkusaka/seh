@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Per-session Claude Code hooks.
+#   seh add <event> <script> [session_id]   # session_id defaults to $CLAUDE_CODE_SESSION_ID
+#   seh dispatch <event>                     # called from settings.json; hook JSON on stdin
+# Registry: ~/.claude/session-hooks/<session_id>/<event>/*  (rm / ls to manage)
+set -euo pipefail
+root="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/session-hooks"
+
+case "${1:-}" in
+  add)
+    event="${2:?event}"; script="${3:?script}"; sid="${4:-${CLAUDE_CODE_SESSION_ID:?session_id}}"
+    [[ -x "$script" ]] || { echo "not executable: $script" >&2; exit 1; }
+    dir="$root/$sid/$event"; mkdir -p "$dir"
+    ln -sf "$(cd "$(dirname "$script")" && pwd)/$(basename "$script")" "$dir/"
+    echo "$dir/$(basename "$script")"
+    ;;
+  dispatch)
+    event="${2:?event}"; input="$(cat)"
+    sid="$(jq -r '.session_id // empty' <<<"$input")"
+    dir="$root/$sid/$event"
+    [[ -n "$sid" && -d "$dir" ]] || exit 0
+    for f in "$dir"/*; do
+      [[ -x "$f" ]] || continue
+      # One failing script must not block the others or the session.
+      "$f" <<<"$input" || echo "seh: $f exited $?" >&2
+    done
+    ;;
+  *) sed -n '2,5p' "$0" >&2; exit 2 ;;
+esac
