@@ -1,18 +1,114 @@
 #!/usr/bin/env bash
-# Per-session Claude Code hooks.
-#   seh add <event> <script> [session_id]   # session_id defaults to $CLAUDE_CODE_SESSION_ID
-#   seh dispatch <event>                     # called from settings.json; hook JSON on stdin
-# Registry: ~/.claude/session-hooks/<session_id>/<event>/*  (rm / ls to manage)
+# Session-scoped hooks for Claude Code, Codex, Devin and Pi.
+#   seh init [claude|codex|devin|pi ...]       # wire CLIs to seh (default: every CLI found)
+#   seh add <event> <script> [session_id]      # session_id defaults to the current CLI session
+#   seh remove <event> <script> [session_id]
+#   seh show [session_id]                      # current session, or every session outside one
+#   seh dispatch <event>                       # called from CLI hooks; hook JSON on stdin
+# Registry: $SEH_ROOT (default ~/.local/state/seh)/<session_id>/<event>/<script symlink>
 set -euo pipefail
-root="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/session-hooks"
+root="${SEH_ROOT:-$HOME/.local/state/seh}"
+
+# Session id of the CLI this runs in.
+current_sid() {
+  # Devin exports no session id: find a devin ancestor, then its session for this directory.
+  # Checked first because Devin is often launched from another CLI and inherits its env.
+  local pid=$PPID ppid comm db="$HOME/.local/share/devin/cli/sessions.db" dir="${DEVIN_PROJECT_DIR:-$PWD}"
+  while ((pid > 1)) && read -r ppid comm < <(ps -o ppid=,comm= -p "$pid"); do
+    if [[ "${comm##*/}" == devin && -f "$db" ]]; then
+      dir="${dir//\'/\'\'}"
+      # ponytail: newest session in this directory (same as wr); wrong if two Devin sessions share it
+      sqlite3 -readonly "$db" "SELECT id FROM sessions WHERE hidden = 0
+        AND ('$dir' = working_directory OR '$dir' LIKE working_directory || '/%')
+        ORDER BY last_activity_at DESC, length(working_directory) DESC LIMIT 1"
+      return
+    fi
+    pid=$ppid
+  done
+  # An inner CLI wins over the CLI it was launched from.
+  echo "${PI_SESSION_ID:-${CODEX_THREAD_ID:-${CLAUDE_CODE_SESSION_ID:-}}}"
+}
+
+resolve_sid() { # [session_id]
+  local sid="${1:-$(current_sid)}"
+  [[ -n "$sid" ]] || { echo "session id not found; pass it explicitly" >&2; return 1; }
+  echo "$sid"
+}
+
+# Adds `seh dispatch <event>` hooks to a Claude-style hooks config, replacing earlier seh entries.
+wire() { # <config file> <jq add() calls>
+  local file="$1"
+  mkdir -p "$(dirname "$file")"
+  [[ -s "$file" ]] || echo '{}' > "$file"
+  # shellcheck disable=SC2016 # $seh is a jq variable
+  local defs='
+    def others: .hooks |= ((. // {}) | map_values(map(select([.hooks[]?.command] | any(test("seh'"'"'? dispatch ")) | not))));
+    def add(ev; m; lbl): .[ev] = ((.[ev] // []) + [(if m == null then {} else {matcher: m} end)
+      + {hooks: [{type: "command", command: "\($seh | @sh) dispatch \(lbl)", timeout: 30}]}]);
+    def clean: .hooks |= with_entries(select(.value != [])) | if .hooks == {} then del(.hooks) else . end;'
+  if ! jq --arg seh "$self" "$defs others | .hooks |= ($2)" "$file" > "$file.tmp" 2>/dev/null ||
+    # Safety net: apart from seh's own hooks, the new config must equal the old one.
+    ! jq -en --arg seh "$self" --slurpfile old "$file" --slurpfile new "$file.tmp" \
+      "$defs (\$old[0] | others | clean) == (\$new[0] | others | clean)" >/dev/null; then
+    rm -f "$file.tmp"
+    echo "not wired $file: unsupported content (left unchanged)" >&2
+    return 1
+  fi
+  cp "$file" "$file.bak-seh-$(date +%Y%m%d%H%M%S)"
+  mv "$file.tmp" "$file"
+  echo "wired $file"
+}
 
 case "${1:-}" in
+  init)
+    shift
+    self="$(readlink -f "$0")"
+    claude="${CLAUDE_CONFIG_DIR:-$HOME/.claude}" codex="${CODEX_HOME:-$HOME/.codex}"
+    devin="$HOME/.config/devin" pi="$HOME/.pi/agent"
+    if (($# == 0)); then
+      for c in claude codex devin pi; do [[ -d "${!c}" ]] && set -- "$@" "$c"; done
+      (($#)) || { echo "no supported CLI found" >&2; exit 1; }
+    fi
+    tools='add("PreToolUse"; null; "pre-tool") | add("PostToolUse"; null; "post-tool")
+      | add("UserPromptSubmit"; null; "prompt") | add("Stop"; null; "stop") | add("SessionEnd"; null; "session-end")'
+    for c in "$@"; do
+      case "$c" in
+        claude) wire "$claude/settings.json" 'add("SessionStart"; "startup|resume|clear|fork"; "session-start")
+          | add("SessionStart"; "compact"; "compact") | '"$tools" ;;
+        codex) wire "$codex/hooks.json" 'add("SessionStart"; "startup|resume|clear"; "session-start")
+          | add("SessionStart"; "compact"; "compact") | '"$tools" ;;
+        devin) wire "$devin/config.json" 'add("SessionStart"; ""; "session-start")
+          | add("PostCompaction"; ""; "compact") | '"${tools//null/\"\"}" ;;
+        pi)
+          mkdir -p "$pi/extensions"
+          ln -sfn "$(cd "$(dirname "$self")/../pi" && pwd)/seh.js" "$pi/extensions/seh.js"
+          echo "linked $pi/extensions/seh.js" ;;
+        *) echo "unknown CLI: $c" >&2; exit 2 ;;
+      esac
+    done
+    ;;
   add)
-    event="${2:?event}"; script="${3:?script}"; sid="${4:-${CLAUDE_CODE_SESSION_ID:?session_id}}"
+    event="${2:?event}"; script="${3:?script}"; sid="$(resolve_sid "${4:-}")"
     [[ -x "$script" ]] || { echo "not executable: $script" >&2; exit 1; }
     dir="$root/$sid/$event"; mkdir -p "$dir"
     ln -sf "$(cd "$(dirname "$script")" && pwd)/$(basename "$script")" "$dir/"
     echo "$dir/$(basename "$script")"
+    ;;
+  remove)
+    event="${2:?event}"; script="${3:?script}"; sid="$(resolve_sid "${4:-}")"
+    f="$root/$sid/$event/$(basename "$script")"
+    [[ -L "$f" || -e "$f" ]] || { echo "not registered: $f" >&2; exit 1; }
+    rm "$f"
+    rmdir "$root/$sid/$event" "$root/$sid" 2>/dev/null || true
+    echo "removed $f"
+    ;;
+  show)
+    sid="${2:-$(current_sid)}"
+    # shellcheck disable=SC2231 # unquoted so the default `*` globs every session
+    for f in "$root"/${sid:-*}/*/*; do
+      [[ -L "$f" || -e "$f" ]] || continue
+      printf '%s -> %s\n' "${f#"$root"/}" "$(readlink "$f")"
+    done
     ;;
   dispatch)
     event="${2:?event}"; input="$(cat)"
@@ -25,5 +121,5 @@ case "${1:-}" in
       "$f" <<<"$input" || echo "seh: $f exited $?" >&2
     done
     ;;
-  *) sed -n '2,5p' "$0" >&2; exit 2 ;;
+  *) sed -n '2,8p' "$0" >&2; exit 2 ;;
 esac

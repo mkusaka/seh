@@ -10,5 +10,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: command -v sqlite3 || (sudo apt-get update && sudo apt-get install -y sqlite3)
       - run: shellcheck bin/seh test.sh
       - run: ./test.sh
