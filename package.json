@@ -1,16 +1,40 @@
 {
-  "name": "seh",
-  "private": true,
+  "name": "pi-seh",
+  "version": "0.0.1",
+  "description": "Session-scoped hooks for Pi and Oh My Pi: run a shell script when one specific session hits a lifecycle event",
+  "keywords": [
+    "hooks",
+    "oh-my-pi",
+    "omp",
+    "pi",
+    "pi-extension",
+    "pi-package"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mkusaka/seh.git"
+  },
+  "files": [
+    "bin",
+    "pi",
+    "skills"
+  ],
   "type": "module",
-  "keywords": ["pi-package", "oh-my-pi"],
-  "pi": {
-    "extensions": ["./pi/seh.ts"],
-    "skills": ["./skills"]
-  },
-  "omp": {
-    "extensions": ["./pi/omp.ts"]
-  },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
+  },
+  "omp": {
+    "extensions": [
+      "./pi/omp.ts"
+    ]
+  },
+  "pi": {
+    "extensions": [
+      "./pi/seh.ts"
+    ],
+    "skills": [
+      "./skills"
+    ]
   }
 }
