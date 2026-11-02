@@ -25,5 +25,11 @@ jobs:
         with:
           node-version: 24 # runs pi/seh.ts via built-in type stripping
       - run: command -v sqlite3 || (sudo apt-get update && sudo apt-get install -y sqlite3)
+      - run: npm install -g "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" "@openai/codex@$CODEX_VERSION"
+        env:
+          # renovate: datasource=npm depName=@anthropic-ai/claude-code
+          CLAUDE_CODE_VERSION: 2.1.311
+          # renovate: datasource=npm depName=@openai/codex
+          CODEX_VERSION: 0.164.0
       - run: shellcheck bin/seh test.sh
       - run: ./test.sh

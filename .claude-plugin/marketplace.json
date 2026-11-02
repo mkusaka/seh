@@ -1,0 +1,11 @@
+{
+  "name": "seh",
+  "owner": { "name": "mkusaka" },
+  "plugins": [
+    {
+      "name": "seh",
+      "source": "./",
+      "description": "Session-scoped hooks: run a shell script when one specific session hits a lifecycle event"
+    }
+  ]
+}

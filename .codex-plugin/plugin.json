@@ -1,0 +1,8 @@
+{
+  "name": "seh",
+  "description": "Session-scoped hooks: run a shell script when one specific session hits a lifecycle event",
+  "repository": "https://github.com/mkusaka/seh",
+  "license": "MIT",
+  "skills": "./skills/",
+  "hooks": "./hooks/codex.json"
+}

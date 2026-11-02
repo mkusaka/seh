@@ -51,6 +51,17 @@ omp install npm:omp-shell-context github:mkusaka/seh
 
 The extensions run the `bin/seh` bundled in the installed package, so they work without `seh` on `PATH`; `seh add` from the agent's shell still needs `seh` on `PATH`.
 
+### Claude Code / Codex plugin
+
+Instead of `seh init claude codex`, Claude Code and Codex can install this repo as a plugin. It bundles the hooks (`hooks/hooks.json` for Claude Code, `hooks/codex.json` for Codex) and the skill:
+
+```sh
+claude plugin marketplace add mkusaka/seh && claude plugin install seh@seh
+codex plugin marketplace add mkusaka/seh && codex plugin add seh@seh
+```
+
+The plugin hooks run the `bin/seh` bundled in the plugin; `seh add` from the agent's shell still needs `seh` on `PATH`. Codex asks you to trust the plugin hooks on the next launch. Use either the plugin or `seh init` for a CLI, not both, or every script runs twice.
+
 `CLAUDE_CONFIG_DIR` and `CODEX_HOME` are respected. There is no uninstall command; remove the `seh dispatch` hooks by hand, and the package with `pi remove <repo>` / `omp plugin uninstall seh`.
 
 ### Agent skill
@@ -92,3 +103,5 @@ Registrations are not cleaned up when a session ends; remove them with `rm -rf ~
 ```sh
 ./test.sh
 ```
+
+With `claude` / `codex` on `PATH`, it also checks that both CLIs load the plugin (no login needed); CI installs pinned versions of both.

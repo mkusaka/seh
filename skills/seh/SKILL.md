@@ -71,6 +71,7 @@ rm -rf ~/.local/state/seh/<session_id>     # remove all for a session
 ## Troubleshooting
 
 - Nothing runs: check the CLI is wired (`seh init <cli>` is safe to re-run; it replaces only seh's own hooks and backs up the config as `*.bak-seh-<timestamp>`), and that the registration exists under the session id the CLI reports.
+- Claude Code / Codex can instead install seh as a plugin (`seh@seh` from the `mkusaka/seh` marketplace), which bundles the hooks. Use the plugin or `seh init` for a CLI, not both, or scripts run twice.
 - Codex: new or changed hooks must be trusted in Codex before they run.
 - Pi / Oh My Pi: `seh init pi` / `seh init omp` installs the seh checkout as a package (`pi install <repo>` / `omp install npm:omp-shell-context <repo>`); they can also install it from GitHub (`pi install git:github.com/mkusaka/seh`, `omp install npm:omp-shell-context github:mkusaka/seh`). Start a new session to load it.
 - Test a registration without the CLI: `echo '{"session_id":"<id>"}' | seh dispatch <event>`.

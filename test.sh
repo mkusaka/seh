@@ -96,6 +96,14 @@ assert.equal(o.tool_call({ toolName: 'bash', input: { command: 'ls' } }, ctx), u
   jq -e '.hooks.Stop[].hooks[].command | select(. == "keep-me")' "$s" >/dev/null || fail "init dropped other hook"
   jq -e --arg c "'$seh' dispatch compact" '.hooks.SessionStart[] | select(.matcher == "compact") | .hooks[0].command == $c' "$s" >/dev/null || fail "claude compact wiring"
   [[ "$(jq '[.hooks[][]] | length' "$HOME/.codex/hooks.json")" == 7 ]] || fail "codex wiring"
+  # plugin hooks wire the same events and matchers as init
+  for p in "claude $s hooks.json" "codex $HOME/.codex/hooks.json codex.json"; do
+    read -r c cfg plugin <<<"$p"
+    jq -e --slurpfile p "$repo/hooks/$plugin" --arg seh "'$seh'" '
+      def norm: .hooks | map_values(map(.hooks |= map(select(.command != "keep-me")
+        | .command |= sub("^\"\\$\\{CLAUDE_PLUGIN_ROOT\\}/bin/seh\""; $seh) | del(.timeout))) | map(select(.hooks != [])));
+      norm == ($p[0] | norm)' "$cfg" >/dev/null || fail "$c plugin hooks differ from init"
+  done
   [[ ! -e "$HOME/.config/devin" ]] || fail "init touched a CLI that is not installed"
   "$seh" init devin >/dev/null
   jq -e '.hooks.PostCompaction[0].matcher == ""' "$HOME/.config/devin/config.json" >/dev/null || fail "devin wiring"
@@ -112,5 +120,28 @@ assert.equal(o.tool_call({ toolName: 'bash', input: { command: 'ls' } }, ctx), u
   done
   true
 )
+
+# Plugins load in the real CLIs (no auth needed). CI installs both; skipped locally when missing.
+if command -v claude >/dev/null; then
+  CLAUDE_CONFIG_DIR="$tmp/claude-cfg" claude plugin validate "$repo" >/dev/null || fail "claude plugin validate"
+else echo "skip: claude not found"; fi
+if command -v codex >/dev/null; then
+  (
+    export CODEX_HOME="$tmp/codex-home"; mkdir -p "$CODEX_HOME"
+    codex plugin marketplace add "$repo" >/dev/null || fail "codex marketplace add"
+    codex plugin add seh@seh >/dev/null || fail "codex plugin add"
+    # Ask the app server which hooks it loaded; stop it once the answer arrives (30s cap).
+    # shellcheck disable=SC2094 # the loop polls the file the pipeline writes, on purpose
+    { printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"t","version":"0"}}}' \
+        '{"jsonrpc":"2.0","method":"initialized"}' \
+        '{"jsonrpc":"2.0","id":2,"method":"hooks/list","params":{"cwds":["'"$repo"'"]}}'
+      for _ in $(seq 150); do [[ -s "$tmp/hooks-list" ]] && break; sleep 0.2; done
+    } | codex app-server 2>/dev/null | jq --unbuffered -c 'select(.id == 2)' | head -n 1 > "$tmp/hooks-list"
+    jq -e '.result.data[0]
+      | .warnings == [] and ([.hooks[] | select(.pluginId == "seh@seh")] | length == 7
+        and all(.key | startswith("seh@seh:hooks/codex.json:")) and all(.command | test("^\"/[^$]*/bin/seh\" dispatch [a-z-]+$")))' \
+      "$tmp/hooks-list" >/dev/null || fail "codex plugin hooks: $(cat "$tmp/hooks-list")"
+  )
+else echo "skip: codex not found"; fi
 
 echo ok
