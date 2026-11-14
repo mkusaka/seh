@@ -18,7 +18,12 @@ export function sehExtension({ omp }: { omp: boolean }) {
         cwd: ctx.cwd,
         ...extra,
       });
-      const r = spawnSync(seh, ["dispatch", event], { input, encoding: "utf8" });
+      const r = spawnSync(seh, ["dispatch", event], {
+        input,
+        encoding: "utf8",
+        stdio: ["pipe", "pipe", "inherit"],
+      });
+      if (r.error) process.stderr.write(`seh ${event}: ${r.error.message}\n`);
       if (r.stdout?.trim()) pending.push(r.stdout.trim());
     };
 
