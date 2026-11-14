@@ -56,13 +56,13 @@ PI_SESSION_ID=inner "$seh" remove stop "$tmp/c.sh" >/dev/null
 # Pi / Oh My Pi extensions: drive handlers with a fake pi and a fake bundled seh
 mkdir -p "$tmp/pkg/bin"
 cp -R "$repo/pi" "$repo/package.json" "$tmp/pkg/"
-printf '#!/bin/sh\ncat > "%s/pi-$2.json"\necho "ctx-$2"\n' "$tmp" > "$tmp/pkg/bin/seh"
+printf '#!/bin/sh\ncat > "%s/pi-$2.json"\necho "ctx-$2"\necho "stderr-$2" >&2\n' "$tmp" > "$tmp/pkg/bin/seh"
 chmod +x "$tmp/pkg/bin/seh"
 node --input-type=module -e "
 import pi from '$tmp/pkg/pi/seh.ts';
 import omp from '$tmp/pkg/pi/omp.ts';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, unlinkSync } from 'node:fs';
 const load = (ext) => { const h = {}; ext({ on: (name, fn) => { h[name] = fn; } }); return h; };
 const ctx = { cwd: '/w', sessionManager: { getSessionId: () => 'pi-sid' } };
 const h = load(pi);
@@ -73,11 +73,22 @@ h.session_start({ reason: 'startup' }, ctx);
 assert.equal(h.before_agent_start({ prompt: 'hi' }, ctx).message.content, 'ctx-compact\n\nctx-session-start\n\nctx-prompt');
 assert.equal(h.before_agent_start({ prompt: 'again' }, ctx).message.content, 'ctx-prompt');
 assert.ok(h.agent_settled && !h.agent_end);
-assert.equal(h.tool_call({ toolName: 'bash', input: { command: 'ls' } }, ctx), undefined);
+h.tool_call({ toolName: 'bash', input: { command: 'ls' } }, ctx);
+assert.deepEqual(JSON.parse(readFileSync('$tmp/pi-pre-tool.json', 'utf8')),
+  { hook_event_name: 'pre-tool', session_id: 'pi-sid', cwd: '/w', tool_name: 'bash', tool_input: { command: 'ls' } });
+assert.equal(h.before_agent_start({ prompt: 'after tool' }, ctx).message.content, 'ctx-pre-tool\\n\\nctx-prompt');
+h.tool_result({ toolName: 'bash', input: { command: 'ls' } }, ctx);
+assert.deepEqual(JSON.parse(readFileSync('$tmp/pi-post-tool.json', 'utf8')),
+  { hook_event_name: 'post-tool', session_id: 'pi-sid', cwd: '/w', tool_name: 'bash', tool_input: { command: 'ls' } });
+assert.equal(h.before_agent_start({ prompt: 'after result' }, ctx).message.content, 'ctx-post-tool\\n\\nctx-prompt');
 const o = load(omp);
 assert.ok(o.agent_end && !o.agent_settled);
 assert.equal(o.tool_call({ toolName: 'bash', input: { command: 'ls' } }, ctx), undefined);
-" || fail "pi extensions"
+unlinkSync('$tmp/pkg/bin/seh');
+h.session_shutdown({ reason: 'shutdown' }, ctx);
+" 2>"$tmp/pi-extension-stderr" || fail "pi extensions"
+grep -q 'stderr-pre-tool' "$tmp/pi-extension-stderr" || fail "Pi extension swallowed hook stderr"
+grep -q 'seh session-end: .*ENOENT' "$tmp/pi-extension-stderr" || fail "Pi extension swallowed a spawn error"
 
 # init: wires found CLIs, is idempotent, keeps other hooks
 (
@@ -94,12 +105,12 @@ assert.equal(o.tool_call({ toolName: 'bash', input: { command: 'ls' } }, ctx), u
   [[ "$(jq -r .model "$s")" == x ]] || fail "init dropped settings"
   [[ "$(jq '[.hooks.Stop[].hooks[].command] | length' "$s")" == 2 ]] || fail "init not idempotent / dropped hook"
   jq -e '.hooks.Stop[].hooks[].command | select(. == "keep-me")' "$s" >/dev/null || fail "init dropped other hook"
-  jq -e --arg c "'$seh' dispatch compact" '.hooks.SessionStart[] | select(.matcher == "compact") | .hooks[0].command == $c' "$s" >/dev/null || fail "claude compact wiring"
+  jq -e --arg c "'$(readlink -f "$seh")' dispatch compact" '.hooks.SessionStart[] | select(.matcher == "compact") | .hooks[0].command == $c' "$s" >/dev/null || fail "claude compact wiring"
   [[ "$(jq '[.hooks[][]] | length' "$HOME/.codex/hooks.json")" == 7 ]] || fail "codex wiring"
   # plugin hooks wire the same events and matchers as init
   for p in "claude $s hooks.json" "codex $HOME/.codex/hooks.json codex.json"; do
     read -r c cfg plugin <<<"$p"
-    jq -e --slurpfile p "$repo/hooks/$plugin" --arg seh "'$seh'" '
+    jq -e --slurpfile p "$repo/hooks/$plugin" --arg seh "'$(readlink -f "$seh")'" '
       def norm: .hooks | map_values(map(.hooks |= map(select(.command != "keep-me")
         | .command |= sub("^\"\\$\\{CLAUDE_PLUGIN_ROOT\\}/bin/seh\""; $seh) | del(.timeout))) | map(select(.hooks != [])));
       norm == ($p[0] | norm)' "$cfg" >/dev/null || fail "$c plugin hooks differ from init"
@@ -107,7 +118,8 @@ assert.equal(o.tool_call({ toolName: 'bash', input: { command: 'ls' } }, ctx), u
   [[ ! -e "$HOME/.config/devin" ]] || fail "init touched a CLI that is not installed"
   "$seh" init devin >/dev/null
   jq -e '.hooks.PostCompaction[0].matcher == ""' "$HOME/.config/devin/config.json" >/dev/null || fail "devin wiring"
-  [[ "$(sort -u "$tmp/installs")" == "omp install npm:omp-shell-context $repo"$'\n'"pi install $repo" ]] || fail "pi/omp install: $(cat "$tmp/installs")"
+  expected_repo="$(readlink -f "$repo")"
+  [[ "$(sort -u "$tmp/installs")" == "omp install npm:omp-shell-context $expected_repo"$'\n'"pi install $expected_repo" ]] || fail "pi/omp install: $(cat "$tmp/installs")"
   "$seh" init nope 2>/dev/null && fail "unknown CLI should fail"
 
   # configs seh cannot rewrite safely are left byte-for-byte unchanged, with no backup or temp file
