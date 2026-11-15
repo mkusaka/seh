@@ -1,6 +1,6 @@
 {
   "name": "pi-seh",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Session-scoped hooks for Pi and Oh My Pi: run a shell script when one specific session hits a lifecycle event",
   "keywords": [
     "hooks",
