@@ -31,7 +31,7 @@ seh add compact /abs/path/after-compact.sh # run after this session is compacted
 ## Writing a script
 
 - stdin is the hook JSON: always `session_id`, usually `cwd` and `hook_event_name`, plus event fields such as `source`, `tool_name`, `tool_input`, `prompt`.
-- stdout goes back to the CLI as the hook's output, so each CLI's own hook rules apply (Claude Code adds it to the conversation for `session-start`, `compact`, and `prompt`). Pi and Oh My Pi add any output as hidden context on the next prompt. Use this to re-inject instructions after compaction.
+- stdout goes back to the CLI as the hook's output, so each CLI's own hook rules apply (Claude Code adds it to the conversation for `session-start`, `compact`, and `prompt`). Pi and Oh My Pi add any output as hidden context on the next prompt; `compact` output is sent right away as a steering message, so it also reaches a run that continues after auto-compaction (e.g. `pi -p`). Use this to re-inject instructions after compaction.
 - Keep scripts fast and quiet; `pre-tool` and `post-tool` run on every tool call. A failing script is reported on stderr and does not block the others.
 
 Example — restore working notes after compaction:

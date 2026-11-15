@@ -63,14 +63,16 @@ import pi from '$tmp/pkg/pi/seh.ts';
 import omp from '$tmp/pkg/pi/omp.ts';
 import assert from 'node:assert/strict';
 import { readFileSync, unlinkSync } from 'node:fs';
-const load = (ext) => { const h = {}; ext({ on: (name, fn) => { h[name] = fn; } }); return h; };
+const sent = [];
+const load = (ext) => { const h = {}; ext({ on: (name, fn) => { h[name] = fn; }, sendMessage: (m, o) => sent.push([m, o]) }); return h; };
 const ctx = { cwd: '/w', sessionManager: { getSessionId: () => 'pi-sid' } };
 const h = load(pi);
 h.session_compact({ reason: 'threshold', signal: new AbortController().signal }, ctx);
 assert.deepEqual(JSON.parse(readFileSync('$tmp/pi-compact.json', 'utf8')),
   { hook_event_name: 'compact', session_id: 'pi-sid', cwd: '/w', source: 'threshold' });
+assert.deepEqual(sent, [[{ customType: 'seh', content: 'ctx-compact', display: false }, { deliverAs: 'steer' }]]);
 h.session_start({ reason: 'startup' }, ctx);
-assert.equal(h.before_agent_start({ prompt: 'hi' }, ctx).message.content, 'ctx-compact\n\nctx-session-start\n\nctx-prompt');
+assert.equal(h.before_agent_start({ prompt: 'hi' }, ctx).message.content, 'ctx-session-start\n\nctx-prompt');
 assert.equal(h.before_agent_start({ prompt: 'again' }, ctx).message.content, 'ctx-prompt');
 assert.ok(h.agent_settled && !h.agent_end);
 h.tool_call({ toolName: 'bash', input: { command: 'ls' } }, ctx);

@@ -40,7 +40,7 @@ seh init claude codex    # or only the ones you name
 `init` is safe to re-run:
 
 - Claude Code / Codex / Devin: adds one hook per event to `settings.json` / `hooks.json` / `config.json`, replacing only earlier seh hooks. Before writing, seh checks that the new file equals the old one apart from seh's own hooks; if the file can't be parsed or the check fails, it is left untouched and `init` exits non-zero. Otherwise the old file is backed up as `*.bak-seh-<timestamp>`. Hooks call `seh` by absolute path. Codex asks you to trust new or changed hooks on the next launch.
-- Pi / Oh My Pi: runs `pi install <repo>` / `omp install npm:omp-shell-context <repo>`. This repo is a package for both (`package.json`: `pi/seh.ts` for Pi plus the skill, `pi/omp.ts` for Oh My Pi), loaded from the checkout in place. Script stdout is added as hidden context on the next prompt. Oh My Pi needs [omp-shell-context](https://github.com/mkusaka/omp-shell-context) so the agent's shell gets `OMP_SESSION_ID`.
+- Pi / Oh My Pi: runs `pi install <repo>` / `omp install npm:omp-shell-context <repo>`. This repo is a package for both (`package.json`: `pi/seh.ts` for Pi plus the skill, `pi/omp.ts` for Oh My Pi), loaded from the checkout in place. Script stdout is added as hidden context on the next prompt; `compact` output is sent right away as a steering message, so it also reaches a run that continues after auto-compaction (e.g. `pi -p`). Oh My Pi needs [omp-shell-context](https://github.com/mkusaka/omp-shell-context) so the agent's shell gets `OMP_SESSION_ID`.
 
 Pi and Oh My Pi can also install the [`pi-seh`](https://www.npmjs.com/package/pi-seh) npm package (or this repo from GitHub), without `seh init`:
 
